@@ -3,7 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
-public class SpawFakeCar : MonoBehaviour
+public class SpawnFakeCar : MonoBehaviour
 {
     [SerializeField] GameObject fakeCar;
     [SerializeField] Transform carBody;

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Unity.VisualScripting;
 using UnityEngine;
 
-public class SendPlayerToRandomPos : MonoBehaviour
+public class SendPlayerToRandomPosition : MonoBehaviour
 {
     float carX = 0;
     float carY = 0;
@@ -43,10 +43,6 @@ public class SendPlayerToRandomPos : MonoBehaviour
             }
         }
     }
-    //private void OnTriggerStay(Collision collision)
-    //{
-        
-    //}
 
  
 }
