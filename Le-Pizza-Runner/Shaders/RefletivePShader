@@ -1,0 +1,120 @@
+Texture2D DiffuseTexture : register(t0); 
+Texture2D NormalMap : register(t1); // Normal map (Not used)
+SamplerState TextureSampler : register(s0);
+
+#define MAX_POINT_LIGHTS 2
+
+struct PointLight
+{
+    float3 PositionWS; // WorldSpace position
+    
+    float Padding;
+    
+    float3 Color; 
+    
+    float Strength; 
+    
+    float Constant; // Constant term for attenuation 
+    
+    float Linear; // Linear term for attenuation
+    
+    float Quadratic; // Quadratic term for attenuation
+    
+    float Padding2;
+};
+
+cbuffer MaterialLightingBuffer : register(b0)
+{
+    float4 CameraPositionWS;
+
+    float4 AmbientColor;
+
+    float3 DirectionLightColour;
+    float Padding3;
+
+    float3 DirectionLightDirection;
+    float Padding4; 
+
+    PointLight PointLights[MAX_POINT_LIGHTS];
+
+    float3 Diffuse; 
+    float Opacity;
+
+    float3 Specular; 
+    float Metallic;
+
+    float Emission;
+    float Roughness;
+    float RefractionIndex;
+    float Padding5; 
+};
+
+struct VIn
+{
+    float4 PositionClipSpace : SV_Position;
+    float4 Color : COLOR;
+    float2 UV : TEXCOORD0;
+    float3 Tangent : TEXCOORD1; 
+    float3 Bitangent : TEXCOORD2; 
+    float3 Normal : TEXCOORD3;
+    float3 WorldPosition : TEXCOORD4;
+};
+
+float4 main(VIn input) : SV_Target
+{
+    // Normalizing the interpolated world space normal from the vertex shader
+    float3 WorldSpaceNormal = normalize(input.Normal);
+
+    // Sampling the full texture into a float4 to preserve the alpha channel.
+    float4 sampledColor = DiffuseTexture.Sample(TextureSampler, input.UV);
+
+    // Multipling the texture RGB colors by the material’s diffuse to get the base color.
+    float3 baseColor = sampledColor.rgb * Diffuse.rgb;
+
+    // Calculating direction from the current pixel to the camera
+    float3 ViewDirection = normalize(CameraPositionWS.xyz - input.WorldPosition);
+    
+    // Calculating directional diffuse light using Lambert’s cosine law
+    float DirectionalDiffuse = saturate(dot(WorldSpaceNormal, -DirectionLightDirection));
+    float3 Directional = DirectionLightColour * DirectionalDiffuse;
+    
+    // Initializing point light accumulation for diffuse and specular components
+    float3 PointDiffuse = float3(0, 0, 0);
+    float3 PointSpecular = float3(0, 0, 0);
+
+    [unroll]
+    for (int PointlightIndex = 0; PointlightIndex < MAX_POINT_LIGHTS; ++PointlightIndex)
+    {
+        if (PointLights[PointlightIndex].Strength <= 0.0f)
+        {
+            continue;
+        }
+        
+         // Creating vector from fragment to point light
+        float3 LightVector = PointLights[PointlightIndex].PositionWS - input.WorldPosition;
+        float LightVectorMagnitude = length(LightVector);
+        float3 LightVectorDirection = LightVector / LightVectorMagnitude;
+
+        // Calculation attenuation using inverse quadratic falloff
+        float Attenuation = 1.0f / (PointLights[PointlightIndex].Constant + PointLights[PointlightIndex].Linear * LightVectorMagnitude + PointLights[PointlightIndex].Quadratic * (LightVectorMagnitude * LightVectorMagnitude));
+        
+        // Calculating point light diffuse light using Lambert’s cosine law
+        float DiffuseFactor = saturate(dot(WorldSpaceNormal, LightVectorDirection));
+        PointDiffuse += PointLights[PointlightIndex].Color * DiffuseFactor * Attenuation * PointLights[PointlightIndex].Strength;
+
+        // Caculating halfway vector between light and view direction for Blinn-Phong specular highlight
+        float3 HalfwayDirection = normalize(LightVectorDirection + ViewDirection);
+        float specFactor = pow(saturate(dot(WorldSpaceNormal, HalfwayDirection)), 32.0f); // 32.0f is the shininess factor
+        PointSpecular += PointLights[PointlightIndex].Color * specFactor * Attenuation * PointLights[PointlightIndex].Strength;
+    }
+
+    // Combining lighting components 
+    float3 FinalColor = (baseColor * (AmbientColor.rgb + Directional + PointDiffuse)) + (Specular.rgb * PointSpecular) + Emission;
+    
+    // Applying gamma correction
+    FinalColor = exp2((1.0f / 2.2f) * log2(FinalColor));
+
+    // Use the alpha from the sampledColor float4 we saved at the beginning.
+    return float4(FinalColor, Opacity * sampledColor.a);
+}
+
