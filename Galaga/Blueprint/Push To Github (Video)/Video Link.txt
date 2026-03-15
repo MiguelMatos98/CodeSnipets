@@ -1,0 +1,1 @@
+https://dev.epicgames.com/community/learning/tutorials/Yo1O/setting-up-git-and-git-lfs-for-unreal-engine-5-using-github-desktop?utm_source=copilot.com
