@@ -56,11 +56,11 @@ public class Ball : MonoBehaviour
 	private float lastBounceTime;
 
 	private bool spinLockedByMovingPad;
-	private bool ballMovementActive;
+	private bool isBallMoving;
 	private bool goalExitSequenceActive;
 
 	private Vector2 lastBounceNormal;
-	private Vector2 preCollisionVelocity;
+	private Vector2 incomingVelocity;
 	private Vector2 spawnPosition;
 	private Vector2 lastValidDirection = Vector2.right;
 
@@ -83,32 +83,42 @@ public class Ball : MonoBehaviour
 		circleCollider = GetComponent<CircleCollider2D>();
 		ballSprite = GetComponent<SpriteRenderer>();
 
+		// Configuring the Rigidbody2D for dynamic physics interactions, continuous collision detection and no gravity
 		ballRigidbody.bodyType = RigidbodyType2D.Dynamic;
-		ballRigidbody.gravityScale = 0f;
+		ballRigidbody.gravityScale = 0.0f;
 		ballRigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
+
+		// Enabling interpolation for smoother visual movement between physics updates
 		ballRigidbody.interpolation = RigidbodyInterpolation2D.Interpolate;
+
+		// Allowing the ball to rotate
 		ballRigidbody.freezeRotation = false;
 
+		// Record spawn position for later respawn
 		spawnPosition = ballRigidbody.position;
+
 		currentSpeed = speed;
 
-		InitializeGhostTrail();
+		CreateGhostTrail();
 	}
 
 	private void FixedUpdate()
 	{
-		if (ballMovementActive)
+		if (isBallMoving)
 		{
-			HardClampVelocity();
+			ClampToMaxSpeed();
 
-			preCollisionVelocity = ballRigidbody.linearVelocity;
+			// Store the current velocity while the ball is moving
+			incomingVelocity = ballRigidbody.linearVelocity;
 
-			PerformPredictiveSweep();
+			ProcessCollisionsAlongPath();
+			
+			// Refactor the code from here: 
 			EmergencyWallContainment();
+			
 			ApplyContinuousSpin();
+			
 			EnforceMinimumSpeed();
-
-			HardClampVelocity();
 
 			if (positionHistory.Count == 0 || Vector2.Distance(ballRigidbody.position, positionHistory[0].position) >= ghostSpacingDistance)
 			{
@@ -134,7 +144,7 @@ public class Ball : MonoBehaviour
 
 	private void OnCollisionEnter2D(Collision2D collision)
 	{
-		if (!ballMovementActive || collision.contactCount == 0)
+		if (!isBallMoving || collision.contactCount == 0)
 			return;
 
 		ContactPoint2D contact = collision.GetContact(0);
@@ -142,13 +152,13 @@ public class Ball : MonoBehaviour
 		if (Time.time - lastBounceTime < collisionCooldown && Vector2.Dot(lastBounceNormal, contact.normal) > bounceNormalThreshold)
 			return;
 
-		if (preCollisionVelocity.sqrMagnitude > 0f && Vector2.Dot(preCollisionVelocity.normalized, contact.normal) >= 0.0f)
+		if (incomingVelocity.sqrMagnitude > 0f && Vector2.Dot(incomingVelocity.normalized, contact.normal) >= 0.0f)
 			return;
 
 		ResolveBounce(contact.point, contact.normal, collision.collider);
 	}
 
-	private void HardClampVelocity()
+	private void ClampToMaxSpeed()
 	{
 		float speed = ballRigidbody.linearVelocity.magnitude;
 
@@ -156,7 +166,7 @@ public class Ball : MonoBehaviour
 			ballRigidbody.linearVelocity = ballRigidbody.linearVelocity.normalized * maxSpeed;
 	}
 
-	private void PerformPredictiveSweep()
+	private void ProcessCollisionsAlongPath()
 	{
 		float radius = circleCollider.radius * transform.lossyScale.x;
 		float remainingTime = Time.fixedDeltaTime;
@@ -192,7 +202,7 @@ public class Ball : MonoBehaviour
 			
 			Physics2D.SyncTransforms();
 
-			preCollisionVelocity = ballRigidbody.linearVelocity;
+			incomingVelocity = ballRigidbody.linearVelocity;
 			ballRigidbody.linearVelocity = Vector2.zero;
 
 			ResolveBounce(hit.point, hit.normal, hit.collider);
@@ -242,7 +252,7 @@ public class Ball : MonoBehaviour
 
 			if (ballRigidbody.linearVelocity.sqrMagnitude > 0.0001f && Vector2.Dot(ballRigidbody.linearVelocity.normalized, normal) < 0f)
 			{ 
-				preCollisionVelocity = ballRigidbody.linearVelocity;
+				incomingVelocity = ballRigidbody.linearVelocity;
 				ballRigidbody.linearVelocity = Vector2.zero;
 
 				ResolveBounce(ballRigidbody.position, normal, other);
@@ -441,7 +451,7 @@ public class Ball : MonoBehaviour
 
 	private void HandleWallCollision(Vector2 normal)
 	{
-		Vector2 incomingDirection = preCollisionVelocity.sqrMagnitude > 0.0001f ? preCollisionVelocity.normalized : lastValidDirection;
+		Vector2 incomingDirection = incomingVelocity.sqrMagnitude > 0.0001f ? incomingVelocity.normalized : lastValidDirection;
 
 		Vector2 reflection = Vector2.Reflect(incomingDirection, normal).normalized;
 
@@ -471,7 +481,7 @@ public class Ball : MonoBehaviour
 		lastValidDirection = reflection;
 	}
 
-	private void InitializeGhostTrail()
+	private void CreateGhostTrail()
 	{
 		positionHistory = new List<TrailSample>();
 
@@ -571,7 +581,7 @@ public class Ball : MonoBehaviour
 
 	public void StopBall()
 	{
-		ballMovementActive = false;
+		isBallMoving = false;
 
 		ballRigidbody.linearVelocity = Vector2.zero;
 		ballRigidbody.angularVelocity = 0f;
@@ -588,7 +598,7 @@ public class Ball : MonoBehaviour
 			yield break;
 
 		goalExitSequenceActive = true;
-		ballMovementActive = false;
+		isBallMoving = false;
 
 		Vector2 exitVelocity = ballRigidbody.linearVelocity;
 
@@ -641,7 +651,7 @@ public class Ball : MonoBehaviour
 
 		Physics2D.SyncTransforms();
 
-		ballMovementActive = true;
+		isBallMoving = true;
 
 		circleCollider.enabled = true;
 
