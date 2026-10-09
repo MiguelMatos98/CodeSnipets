@@ -20,8 +20,6 @@ public class Ball : MonoBehaviour
 	private float flatBounceNudgePerHit = 0.03f;
 	private float maxFlatBounceNudge = 0.25f;
 
-	private float sweepSafetyMultiplier = 1.15f;
-	private int maxSweepIterations = 4;
 	private float sweepSeparation = 0.025f;
 
 	[SerializeField] private LayerMask sweepLayerMask;
@@ -55,7 +53,7 @@ public class Ball : MonoBehaviour
 	private float currentSpinStrength;
 	private float lastBounceTime;
 
-	private bool spinLockedByMovingPad;
+	private bool isSpinLocked;
 	private bool isBallMoving;
 	private bool goalExitSequenceActive;
 
@@ -110,11 +108,8 @@ public class Ball : MonoBehaviour
 
 			// Store the current velocity while the ball is moving
 			incomingVelocity = ballRigidbody.linearVelocity;
-
-			ProcessCollisionsAlongPath();
 			
-			// Refactor the code from here: 
-			EmergencyWallContainment();
+			CorrectMovementAtWalls();
 			
 			ApplyContinuousSpin();
 			
@@ -132,7 +127,7 @@ public class Ball : MonoBehaviour
 		else
 		{
 			ballRigidbody.linearVelocity = Vector2.zero;
-			ballRigidbody.angularVelocity = 0f;
+			ballRigidbody.angularVelocity = 0.0f;
 
 			HideAllGhosts();
 			
@@ -164,58 +159,6 @@ public class Ball : MonoBehaviour
 
 		if (speed > maxSpeed)
 			ballRigidbody.linearVelocity = ballRigidbody.linearVelocity.normalized * maxSpeed;
-	}
-
-	private void ProcessCollisionsAlongPath()
-	{
-		float radius = circleCollider.radius * transform.lossyScale.x;
-		float remainingTime = Time.fixedDeltaTime;
-
-		ResolveStartingOverlap();
-
-		for (int iteration = 0; iteration < maxSweepIterations; iteration++)
-		{
-			Vector2 velocity = ballRigidbody.linearVelocity;
-			float speed = velocity.magnitude;
-
-			if (speed < 0.0001f)
-				break;
-
-			Vector2 direction = velocity.normalized;
-			float travelDistance = speed * remainingTime;
-			float castDistance = travelDistance + radius * sweepSafetyMultiplier;
-
-			RaycastHit2D hit = Physics2D.CircleCast(ballRigidbody.position, radius, direction, castDistance, sweepLayerMask);
-
-			if (hit.collider == null)
-				break;
-
-			if (hit.distance > travelDistance)
-				break;
-
-			if (Time.time - lastBounceTime < collisionCooldown && Vector2.Dot(lastBounceNormal, hit.normal) > bounceNormalThreshold)
-				break;
-
-			float timeToHit = hit.distance / speed;
-
-			ballRigidbody.position = hit.centroid - hit.normal * sweepSeparation;
-			
-			Physics2D.SyncTransforms();
-
-			incomingVelocity = ballRigidbody.linearVelocity;
-			ballRigidbody.linearVelocity = Vector2.zero;
-
-			ResolveBounce(hit.point, hit.normal, hit.collider);
-
-			remainingTime -= timeToHit;
-
-			if (remainingTime <= 0.000001f)
-				break;
-
-			ballRigidbody.position += hit.normal * sweepSeparation;
-
-			Physics2D.SyncTransforms();
-		}
 	}
 
 	private void ResolveStartingOverlap()
@@ -260,49 +203,43 @@ public class Ball : MonoBehaviour
 		}
 	}
 
-	private void EmergencyWallContainment()
+	private void CorrectMovementAtWalls()
 	{
+		// Converting the collider's radius from local-space to world-space units
 		float radius = circleCollider.radius * transform.lossyScale.x;
 
 		Vector2 position = ballRigidbody.position;
 		Vector2 velocity = ballRigidbody.linearVelocity;
 
-		bool corrected = false;
-
+		// Correcting the ball's position if it exceeds the upper wall 
 		if (position.y + radius > verticalWallLimit)
 		{
 			position.y = verticalWallLimit - radius;
 
+			// Flipping the ball's direction from up to down
 			if (velocity.y > 0.0f)
-			{
-				velocity.y = -Mathf.Abs(velocity.y);
-				corrected = true;
-			}
+				velocity.y = -velocity.y;
 		}
-
-		if (position.y - radius < -verticalWallLimit)
+		// Correcting the ball's position if it exceeds the lower wall
+		else if (position.y - radius < -verticalWallLimit)
 		{
 			position.y = -verticalWallLimit + radius;
 
+			// Flipping the ball's direction from down to up
 			if (velocity.y < 0.0f)
-			{
-				velocity.y = Mathf.Abs(velocity.y);
-				corrected = true;
-			}
+				velocity.y = -velocity.y;
 		}
-
-		if (!corrected)
+		// Returning if neither walls have been crossed
+		else
 			return;
 
+		// Applying the corrected position and velocity to the Rigidbody
 		ballRigidbody.position = position;
+		ballRigidbody.linearVelocity = velocity;
 
+		// Updating the direction if velocity is not 0 
 		if (velocity.sqrMagnitude > 0.0001f)
-		{
-			velocity = velocity.normalized * Mathf.Clamp(velocity.magnitude, speed, maxSpeed);
-
-			ballRigidbody.linearVelocity = velocity;
 			lastValidDirection = velocity.normalized;
-		}
 	}
 
 	private void EnforceMinimumSpeed()
@@ -402,7 +339,7 @@ public class Ball : MonoBehaviour
 
 			currentSpinStrength = naturalSpinStrength;
 			
-			spinLockedByMovingPad = false;
+			isSpinLocked = false;
 		}
 		else if (padVelocityY > 0.0f)
 		{
@@ -410,7 +347,7 @@ public class Ball : MonoBehaviour
 
 			currentSpinStrength = paddleSpinStrength;
 			
-			spinLockedByMovingPad = true;
+			isSpinLocked = true;
 		}
 		else
 		{
@@ -418,13 +355,13 @@ public class Ball : MonoBehaviour
 
 			currentSpinStrength = paddleSpinStrength;
 			
-			spinLockedByMovingPad = true;
+			isSpinLocked = true;
 		}
 	}
 
 	private void ApplyContinuousSpin()
 	{
-		if (!spinLockedByMovingPad)
+		if (!isSpinLocked)
 		{
 			if (ballRigidbody.linearVelocity.x > 0.05f)
 				currentSpinDirection = -1;
@@ -444,7 +381,7 @@ public class Ball : MonoBehaviour
 
 		currentSpinStrength = naturalSpinStrength;
 		
-		spinLockedByMovingPad = false;
+		isSpinLocked = false;
 		
 		ApplyContinuousSpin();
 	}
