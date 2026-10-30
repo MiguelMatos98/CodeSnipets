@@ -1,614 +1,280 @@
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(Rigidbody2D))]
 [RequireComponent(typeof(CircleCollider2D))]
-[RequireComponent(typeof(SpriteRenderer))]
+[RequireComponent(typeof(Trail))]
 public class Ball : MonoBehaviour
 {
-	private float speed = 6f;
-	private float maxSpeed = 15f;
-	private float speedIncreasePerHit = 1f;
-	private float minSpeedRatio = 0.85f;
+	private int minSpeed;
+	private int maxSpeed;
+	private int speedGainAmount;
+	
+	private float verticalLimit;
+	private float horizontalDeflectionAmount;
+	private float spinStrength;
+	private float exitDistance;
 
-	private float verticalStrength = 1.8f;
-	private float verticalHitRadius = 0.92f;
-	private float verticalDirectionThreshold = 0.80f;
-	private float verticalBounceDetectionThreshold = 0.18f;
-
-	private float flatBounceNudgePerHit = 0.03f;
-	private float maxFlatBounceNudge = 0.25f;
-
-	private float sweepSeparation = 0.025f;
-
-	[SerializeField] private LayerMask sweepLayerMask;
-
-	private float verticalWallLimit = 4.98f;
-
-	private int maxPadHorizontalBounces = 2;
-	private float padHorizontalDeflectionPerBounce = 0.12f;
-	private float padMaxHorizontalDeflection = 0.65f;
-	private float flatHitThreshold = 0.12f;
-
-	private float naturalSpinStrength = 720f;
-	private float paddleSpinStrength = 900f;
-
-	private float collisionCooldown = 0.05f;
-	private float bounceNormalThreshold = 0.95f;
-
-	private float ghostSpacingDistance = 0.18f;
-	private float finalGhostTipScale = 0.25f;
-	private float ghostAlpha = 0.35f;
-
-	private float goalExitDistance = 3.5f;
-
-	private int consecutiveFlatWallBounces;
-	private int padHorizontalBounceCount;
-	private int padHorizontalDeflectionDir = 1;
-	private int currentSpinDirection = -1;
-
-	private float currentSpeed;
-	private float padHorizontalDeflection;
-	private float currentSpinStrength;
-	private float lastBounceTime;
-
-	private bool isSpinLocked;
-	private bool isBallMoving;
-	private bool goalExitSequenceActive;
-
-	private Vector2 lastBounceNormal;
-	private Vector2 incomingVelocity;
 	private Vector2 spawnPosition;
-	private Vector2 lastValidDirection = Vector2.right;
+	private Vector2 incomingVelocity;
 
-	private struct TrailSample
-	{
-		public Vector2 position;
-		public Quaternion rotation;
-	}
-
-	private List<TrailSample> positionHistory;
-	private SpriteRenderer[] ghostRenderers;
-
-	private SpriteRenderer ballSprite;
 	private Rigidbody2D ballRigidbody;
 	private CircleCollider2D circleCollider;
+	private Trail trail;
 
 	private void Awake()
 	{
+		/*
+	    Rigidbody2D has already been set in the Inspector to Kinematic, Gravity Scale to 0, Collision Detection to Continuous to 
+	    avoid tunneling through the wall or the pads, Interpolation to Interpolate because movement needs visual smoothing
+	    */
+
+		minSpeed = 6;
+		maxSpeed = 15;
+		speedGainAmount = 1;
+
+		verticalLimit = 4.98f;
+		horizontalDeflectionAmount = 0.15f;
+		spinStrength = 720.0f;
+		exitDistance = 3.5f;
+
+		// Using the ball's starting scene position as its spawn point
+		spawnPosition = transform.position;
+
+		incomingVelocity = Vector2.zero;
+
 		ballRigidbody = GetComponent<Rigidbody2D>();
 		circleCollider = GetComponent<CircleCollider2D>();
-		ballSprite = GetComponent<SpriteRenderer>();
+		trail = GetComponent<Trail>();
 
-		// Configuring the Rigidbody2D for dynamic physics interactions, continuous collision detection and no gravity
-		ballRigidbody.bodyType = RigidbodyType2D.Dynamic;
-		ballRigidbody.gravityScale = 0.0f;
-		ballRigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-
-		// Enabling interpolation for smoother visual movement between physics updates
-		ballRigidbody.interpolation = RigidbodyInterpolation2D.Interpolate;
-
-		// Allowing the ball to rotate
-		ballRigidbody.freezeRotation = false;
-
-		// Record spawn position for later respawn
-		spawnPosition = ballRigidbody.position;
-
-		currentSpeed = speed;
-
-		CreateGhostTrail();
+		// Passing max speed to set the trail's ghost count
+		trail.Initialize(maxSpeed);
 	}
 
 	private void FixedUpdate()
 	{
-		if (isBallMoving)
-		{
-			ClampToMaxSpeed();
-
-			// Store the current velocity while the ball is moving
-			incomingVelocity = ballRigidbody.linearVelocity;
-			
-			CorrectMovementAtWalls();
-			
-			ApplyContinuousSpin();
-			
-			EnforceMinimumSpeed();
-
-			if (positionHistory.Count == 0 || Vector2.Distance(ballRigidbody.position, positionHistory[0].position) >= ghostSpacingDistance)
-			{
-				RecordTrailSample();
-			}
-		}
-		else if (goalExitSequenceActive)
-		{
-			ApplyContinuousSpin();
-		}
-		else
-		{
-			ballRigidbody.linearVelocity = Vector2.zero;
-			ballRigidbody.angularVelocity = 0.0f;
-
-			HideAllGhosts();
-			
+		if (ballRigidbody.bodyType != RigidbodyType2D.Dynamic)
 			return;
-		}
 
-		UpdateGhostTrail();
+		ClampSpeed();
+
+		if (circleCollider.enabled)
+			CorrectMovementAtWalls();
+
+		// Storing the velocity before the next collision changes it
+		incomingVelocity = ballRigidbody.linearVelocity;
+
+		trail.Record(ballRigidbody.position);
+
+		// Keeping the spin constant against damping and friction
+		ballRigidbody.angularVelocity = Mathf.Sign(ballRigidbody.angularVelocity) * spinStrength;
+
+		trail.Refresh(ballRigidbody.linearVelocity.magnitude);
 	}
 
 	private void OnCollisionEnter2D(Collision2D collision)
 	{
-		if (!isBallMoving || collision.contactCount == 0)
+		if (!circleCollider.enabled || collision.contactCount == 0)
 			return;
 
 		ContactPoint2D contact = collision.GetContact(0);
 
-		if (Time.time - lastBounceTime < collisionCooldown && Vector2.Dot(lastBounceNormal, contact.normal) > bounceNormalThreshold)
-			return;
-
-		if (incomingVelocity.sqrMagnitude > 0f && Vector2.Dot(incomingVelocity.normalized, contact.normal) >= 0.0f)
+		// Ignoring contacts where the ball is already moving away from the surface
+		if (Vector2.Dot(incomingVelocity, contact.normal) >= 0.0f)
 			return;
 
 		ResolveBounce(contact.point, contact.normal, collision.collider);
 	}
 
-	private void ClampToMaxSpeed()
+	public void Spawn()
 	{
-		float speed = ballRigidbody.linearVelocity.magnitude;
+		gameObject.SetActive(true);
 
-		if (speed > maxSpeed)
-			ballRigidbody.linearVelocity = ballRigidbody.linearVelocity.normalized * maxSpeed;
+		ballRigidbody.simulated = true;
+		ballRigidbody.position = spawnPosition;
+		transform.position = spawnPosition;
+
+		// Syncing transforms so the collider moves to the spawn position immediately
+		Physics2D.SyncTransforms();
+
+		trail.Clear();
+		trail.ResetFade();
+
+		ballRigidbody.WakeUp();
 	}
 
-	private void ResolveStartingOverlap()
+	public void Launch(Vector2 direction)
 	{
-		float radius = circleCollider.radius * transform.lossyScale.x;
+		circleCollider.enabled = true;
+		ballRigidbody.bodyType = RigidbodyType2D.Dynamic;
 
-		Collider2D[] overlaps = Physics2D.OverlapCircleAll(ballRigidbody.position, radius, sweepLayerMask);
+		Vector2 launchDirection = direction.normalized;
+		float launchSpeed = Mathf.Clamp(incomingVelocity.magnitude, minSpeed, maxSpeed);
 
-		if (overlaps.Length == 0)
-			return;
+		ballRigidbody.linearVelocity = launchDirection * launchSpeed;
 
-		foreach (Collider2D other in overlaps)
+		incomingVelocity = ballRigidbody.linearVelocity;
+
+		// Spinning clockwise when moving right and counter clockwise when moving left
+		ballRigidbody.angularVelocity = launchDirection.x > 0.0f ? -spinStrength : spinStrength;
+
+		trail.Record(ballRigidbody.position);
+
+		SFXManager.Instance.PlaySoundEffect(SFXType.BallRespawn);
+	}
+
+	public void Despawn()
+	{
+		ballRigidbody.linearVelocity = Vector2.zero;
+		ballRigidbody.angularVelocity = 0.0f;
+
+		incomingVelocity = Vector2.zero;
+
+		circleCollider.enabled = false;
+		ballRigidbody.bodyType = RigidbodyType2D.Kinematic;
+
+		gameObject.SetActive(false);
+
+		trail.Hide();
+	}
+
+	private void ReflectOffWall(Vector2 normal)
+	{
+		Vector2 incomingDirection = incomingVelocity.normalized;
+
+		Vector2 reflectedDirection = Vector2.Reflect(incomingDirection, normal).normalized;
+
+		// Preventing near vertical reflections off the top and bottom walls by enforcing a minimum horizontal direction
+		if (Mathf.Abs(normal.y) > 0.99f && Mathf.Abs(reflectedDirection.x) < horizontalDeflectionAmount)
 		{
-			if (other == circleCollider)
-				continue;
+			float sign = reflectedDirection.x != 0.0f ? Mathf.Sign(reflectedDirection.x) : (Random.value < 0.5f ? -1.0f : 1.0f);
 
-			ColliderDistance2D distance = circleCollider.Distance(other);
+			reflectedDirection.x += sign * horizontalDeflectionAmount;
 
-			if (!distance.isOverlapped)
-				continue;
-
-			Vector2 normal = distance.normal;
-
-			if (normal.sqrMagnitude < 0.000001f)
-				continue;
-
-			normal.Normalize();
-
-			float penetration = Mathf.Abs(distance.distance);
-
-			ballRigidbody.position += normal * (penetration + sweepSeparation);
-
-			Physics2D.SyncTransforms();
-
-			if (ballRigidbody.linearVelocity.sqrMagnitude > 0.0001f && Vector2.Dot(ballRigidbody.linearVelocity.normalized, normal) < 0f)
-			{ 
-				incomingVelocity = ballRigidbody.linearVelocity;
-				ballRigidbody.linearVelocity = Vector2.zero;
-
-				ResolveBounce(ballRigidbody.position, normal, other);
-			}
+			reflectedDirection.Normalize();
 		}
-	}
 
+		float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude, minSpeed, maxSpeed);
+
+		ballRigidbody.linearVelocity = reflectedDirection * reflectedSpeed;
+	}
+	
 	private void CorrectMovementAtWalls()
 	{
 		// Converting the collider's radius from local-space to world-space units
-		float radius = circleCollider.radius * transform.lossyScale.x;
+		float worldRadius = circleCollider.radius * transform.lossyScale.x;
 
-		Vector2 position = ballRigidbody.position;
-		Vector2 velocity = ballRigidbody.linearVelocity;
+		Vector2 correctedPosition = ballRigidbody.position;
+		Vector2 correctedVelocity = ballRigidbody.linearVelocity;
 
 		// Correcting the ball's position if it exceeds the upper wall 
-		if (position.y + radius > verticalWallLimit)
+		if (correctedPosition.y + worldRadius > verticalLimit)
 		{
-			position.y = verticalWallLimit - radius;
+			correctedPosition.y = verticalLimit - worldRadius;
 
 			// Flipping the ball's direction from up to down
-			if (velocity.y > 0.0f)
-				velocity.y = -velocity.y;
+			if (correctedVelocity.y > 0.0f)
+				correctedVelocity.y = -correctedVelocity.y;
 		}
 		// Correcting the ball's position if it exceeds the lower wall
-		else if (position.y - radius < -verticalWallLimit)
+		else if (correctedPosition.y - worldRadius < -verticalLimit)
 		{
-			position.y = -verticalWallLimit + radius;
+			correctedPosition.y = -verticalLimit + worldRadius;
 
 			// Flipping the ball's direction from down to up
-			if (velocity.y < 0.0f)
-				velocity.y = -velocity.y;
+			if (correctedVelocity.y < 0.0f)
+				correctedVelocity.y = -correctedVelocity.y;
 		}
 		// Returning if neither walls have been crossed
 		else
 			return;
 
 		// Applying the corrected position and velocity to the Rigidbody
-		ballRigidbody.position = position;
-		ballRigidbody.linearVelocity = velocity;
-
-		// Updating the direction if velocity is not 0 
-		if (velocity.sqrMagnitude > 0.0001f)
-			lastValidDirection = velocity.normalized;
+		ballRigidbody.position = correctedPosition;
+		ballRigidbody.linearVelocity = correctedVelocity;
 	}
 
-	private void EnforceMinimumSpeed()
+	private Vector2 ReflectOffPad(Vector2 contactPoint, Collider2D padCollider)
 	{
-		float speed = ballRigidbody.linearVelocity.magnitude;
-		float minimumSpeed = currentSpeed * minSpeedRatio;
+		Vector2 padCenter = padCollider.bounds.center;
 
-		if (speed >= minimumSpeed)
-		{
-			if (speed > 0.01f)
-				lastValidDirection = ballRigidbody.linearVelocity.normalized;
-
-			return;
-		}
-
-		Vector2 direction = speed > 0.01f ? ballRigidbody.linearVelocity.normalized : lastValidDirection;
-
-		ballRigidbody.linearVelocity = direction * currentSpeed;
+		return (contactPoint - padCenter).normalized;
 	}
 
 	private void ResolveBounce(Vector2 point, Vector2 normal, Collider2D collider)
 	{
-		lastBounceTime = Time.time;
-		lastBounceNormal = normal;
-
 		if (collider.CompareTag("Pad"))
 		{
 			if (!collider.TryGetComponent(out Pad pad))
 				return;
 
-			Vector2 exitDirection = CalculatePadBounce(point, collider);
-			ballRigidbody.linearVelocity = exitDirection * speed;
+			Vector2 reflectedDirection = ReflectOffPad(point, collider);
 
-			lastValidDirection = exitDirection;
+			float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude + speedGainAmount, minSpeed, maxSpeed);
 
-			ApplyPadSpin(pad);
+			ballRigidbody.linearVelocity = reflectedDirection * reflectedSpeed;
 
-			float clampedSpeed = Mathf.Clamp(currentSpeed, speed, maxSpeed);
-
-			currentSpeed = Mathf.Clamp(currentSpeed + speedIncreasePerHit, speed, maxSpeed);
+			ApplySpin(pad);
 		}
 		else
-		{
-			HandleWallCollision(normal);
-		}
+			ReflectOffWall(normal);
+
+		// Store the outgoing velocity for subsequent collision handling
+		incomingVelocity = ballRigidbody.linearVelocity;
 
 		SFXManager.Instance.PlaySoundEffect(SFXType.BallBounce);
 	}
 
-	private Vector2 CalculatePadBounce(Vector2 contactPoint, Collider2D padCollider)
+	private void ClampSpeed()
 	{
-		Bounds bounds = padCollider.bounds;
+		Vector2 currentVelocity = ballRigidbody.linearVelocity;
 
-		float hitPosition = Mathf.Clamp((contactPoint.y - bounds.center.y) / bounds.extents.y, -1f, 1f);
+		float currentSpeed = currentVelocity.magnitude;
 
-		float faceX = bounds.center.x < 0.0f ? 1.0f : -1.0f;
-
-		Vector2 direction = new Vector2(faceX, hitPosition * verticalStrength).normalized;
-
-		if (Mathf.Abs(hitPosition) >= verticalHitRadius && Mathf.Abs(direction.x) <= verticalDirectionThreshold)
-			direction = new Vector2(0f, Mathf.Sign(hitPosition));
-
-		bool isFlatHit = Mathf.Abs(direction.y) < flatHitThreshold;
-
-		if (isFlatHit)
+		// Using the stored velocity if the current velocity is nearly zero
+		if (currentSpeed <= 0.01f)
 		{
-			padHorizontalBounceCount++;
+			currentVelocity = incomingVelocity;
+			currentSpeed = currentVelocity.magnitude;
 
-			if (padHorizontalBounceCount > maxPadHorizontalBounces)
-			{
-				padHorizontalDeflection += padHorizontalDeflectionPerBounce;
-
-				padHorizontalDeflection = Mathf.Min(padHorizontalDeflection, padMaxHorizontalDeflection);
-
-				padHorizontalDeflectionDir *= -1;
-
-				direction = new Vector2(direction.x, padHorizontalDeflectionDir * padHorizontalDeflection).normalized;
-			}
-		}
-		else
-		{
-			padHorizontalBounceCount = 0;
-			padHorizontalDeflection = 0.0f;
+			// Returning if the stored velocity is effectively zero
+			if (currentSpeed <= 0.0001f)
+				return;
 		}
 
-		return direction;
+		float clampedSpeed = Mathf.Clamp(currentSpeed, minSpeed, maxSpeed);
+
+		ballRigidbody.linearVelocity = currentVelocity.normalized * clampedSpeed;
 	}
 
-	private void ApplyPadSpin(Pad pad)
+	public IEnumerator ExitGoalAndFadeTrail()
 	{
-		float padVelocityY = pad.CurrentVelocity.y;
-		bool isRightPad = pad.transform.position.x > 0.0f;
-
-		if (padVelocityY == 0.0f)
-		{
-			currentSpinDirection = isRightPad ? 1 : -1;
-
-			currentSpinStrength = naturalSpinStrength;
-			
-			isSpinLocked = false;
-		}
-		else if (padVelocityY > 0.0f)
-		{
-			currentSpinDirection = isRightPad ? 1 : -1;
-
-			currentSpinStrength = paddleSpinStrength;
-			
-			isSpinLocked = true;
-		}
-		else
-		{
-			currentSpinDirection = isRightPad ? -1 : 1;
-
-			currentSpinStrength = paddleSpinStrength;
-			
-			isSpinLocked = true;
-		}
-	}
-
-	private void ApplyContinuousSpin()
-	{
-		if (!isSpinLocked)
-		{
-			if (ballRigidbody.linearVelocity.x > 0.05f)
-				currentSpinDirection = -1;
-			else if (ballRigidbody.linearVelocity.x < -0.05f)
-				currentSpinDirection = 1;
-		}
-
-		if (currentSpinStrength <= 0.0f)
-			currentSpinStrength = naturalSpinStrength;
-
-		ballRigidbody.angularVelocity = currentSpinDirection * currentSpinStrength;
-	}
-
-	private void ApplySpawnSpin()
-	{
-		currentSpinDirection = ballRigidbody.linearVelocity.x > 0.0f ? -1 : 1;
-
-		currentSpinStrength = naturalSpinStrength;
-		
-		isSpinLocked = false;
-		
-		ApplyContinuousSpin();
-	}
-
-	private void HandleWallCollision(Vector2 normal)
-	{
-		Vector2 incomingDirection = incomingVelocity.sqrMagnitude > 0.0001f ? incomingVelocity.normalized : lastValidDirection;
-
-		Vector2 reflection = Vector2.Reflect(incomingDirection, normal).normalized;
-
-		bool isTopBottomWall = Mathf.Abs(normal.y) > 0.9f;
-
-		if (isTopBottomWall)
-		{
-			float horizontalAmount = Mathf.Abs(reflection.x);
-
-			if (horizontalAmount < verticalBounceDetectionThreshold)
-			{
-				consecutiveFlatWallBounces++;
-
-				float nudge = Mathf.Min(flatBounceNudgePerHit * consecutiveFlatWallBounces, maxFlatBounceNudge);
-
-				float sign = reflection.x != 0f ? Mathf.Sign(reflection.x) : (Random.value < 0.5f ? -1f : 1f);
-
-				reflection = new Vector2(reflection.x + sign * nudge, reflection.y).normalized;
-			}
-			else
-				consecutiveFlatWallBounces = 0;
-		}
-		else
-			consecutiveFlatWallBounces = 0;
-
-		ballRigidbody.linearVelocity = reflection * speed;
-		lastValidDirection = reflection;
-	}
-
-	private void CreateGhostTrail()
-	{
-		positionHistory = new List<TrailSample>();
-
-		int ghostCount = (int)maxSpeed + 1; 
-
-		ghostRenderers = new SpriteRenderer[ghostCount];
-
-		GameObject container = new GameObject("GhostTrail");
-
-		container.transform.SetParent(transform.parent);
-
-		for (int i = 0; i < ghostRenderers.Length; i++)
-		{
-			GameObject ghost = new GameObject("Ghost_" + i);
-
-			ghost.transform.SetParent(container.transform);
-
-			SpriteRenderer sprite = ghost.AddComponent<SpriteRenderer>();
-
-			sprite.enabled = false;
-			sprite.sprite = ballSprite.sprite;
-			sprite.sortingLayerID = ballSprite.sortingLayerID;
-			sprite.sortingOrder = ballSprite.sortingOrder - 1;
-
-			ghostRenderers[i] = sprite;
-		}
-	}
-
-	private void RecordTrailSample()
-	{	
-		positionHistory.Insert(0, new TrailSample { position = ballRigidbody.position, rotation = transform.rotation });
-
-		if (positionHistory.Count > ghostRenderers.Length)
-			positionHistory.RemoveAt(positionHistory.Count - 1);
-	}
-
-	private void UpdateGhostTrail()
-	{
-		int fullSlots = Mathf.Clamp(Mathf.FloorToInt(currentSpeed), 0, ghostRenderers.Length);
-
-		float fraction = currentSpeed - fullSlots;
-		
-		int totalVisibleSlots = fraction > 0.0f ? Mathf.Min(fullSlots + 1, ghostRenderers.Length) : fullSlots;
-
-		for (int i = 0; i < ghostRenderers.Length; i++)
-		{
-			SpriteRenderer ghost = ghostRenderers[i];
-
-			if (i >= totalVisibleSlots || i >= positionHistory.Count)
-			{
-				ghost.enabled = false;
-				continue;
-			}
-
-			TrailSample sample = positionHistory[i];
-
-			ghost.transform.position = sample.position;
-			ghost.transform.rotation = sample.rotation;
-
-			float normalizedIndex = totalVisibleSlots <= 1.0f ? 0.0f : (float)i / (totalVisibleSlots - 1);
-
-			float scale = Mathf.Lerp(1.0f, finalGhostTipScale, normalizedIndex);
-
-			ghost.transform.localScale = transform.root.localScale * scale;
-
-			bool isLastVisible = i == totalVisibleSlots - 1;
-			
-			float slotAlpha = isLastVisible && fraction > 0.0f ? fraction : 1.0f;
-
-			Color spriteColor = ballSprite.color;
-			spriteColor.a = ghostAlpha * slotAlpha;
-			ghost.color = spriteColor;
-
-			ghost.enabled = true;
-		}
-	}
-
-	private void HideAllGhosts()
-	{
-		if (ghostRenderers == null) 
-			return;
-
-		foreach (SpriteRenderer ghost in ghostRenderers)
-			ghost.enabled = false;
-	}
-
-	public void ClearGhosts()
-	{
-		positionHistory.Clear();
-		HideAllGhosts();
-	}
-
-	public void ResetBallSpeed()
-	{
-		currentSpeed = speed;
-	}
-
-	public void StopBall()
-	{
-		isBallMoving = false;
-
-		ballRigidbody.linearVelocity = Vector2.zero;
-		ballRigidbody.angularVelocity = 0f;
-	}
-
-	public Rigidbody2D GetBallRigidbody()
-	{
-		return ballRigidbody;
-	}
-
-	public IEnumerator StopBallAndWaitForGhosts()
-	{
-		if (goalExitSequenceActive)
-			yield break;
-
-		goalExitSequenceActive = true;
-		isBallMoving = false;
-
-		Vector2 exitVelocity = ballRigidbody.linearVelocity;
-
-		float exitSpeed = exitVelocity.magnitude;
-
-		if (exitSpeed < 0.01f)
-			exitSpeed = currentSpeed;
-
-		Vector2 exitDirection = exitVelocity.sqrMagnitude > 0.01f ? exitVelocity.normalized : lastValidDirection.normalized;
+		ClampSpeed();
 
 		circleCollider.enabled = false;
 
-		ballRigidbody.linearVelocity = Vector2.zero;
+		float exitSpeed = ballRigidbody.linearVelocity.magnitude;
 
-		ApplyContinuousSpin();
+		if (exitSpeed <= 0.0001f)
+			yield break;
 
-		float exitDistanceTraveled = 0f;
+		float exitDuration = exitDistance / exitSpeed;
 
-		while (exitDistanceTraveled < goalExitDistance)
-		{
-			float step = exitSpeed * Time.fixedDeltaTime;
-
-			ballRigidbody.position += exitDirection * step;
-			exitDistanceTraveled += step;
-
-			if (positionHistory.Count == 0 || Vector2.Distance(ballRigidbody.position, positionHistory[0].position) >= ghostSpacingDistance)
-			{
-				RecordTrailSample();
-			}
-
-			yield return new WaitForFixedUpdate();
-		}
-
-		ballRigidbody.linearVelocity = Vector2.zero;
-		ballRigidbody.angularVelocity = 0f;
-
-		ClearGhosts();
-
-		goalExitSequenceActive = false;
+		yield return trail.FadeOut(exitDuration, exitSpeed);
 	}
 
-	public IEnumerator MovementDelayCoroutine(Vector2 direction, float delay)
+	// Correct Method name
+	private void ApplySpin(Pad pad)
 	{
-		yield return new WaitForSeconds(delay);
+		float spinDirection = 0.0f;
 
-		ballRigidbody.linearVelocity = Vector2.zero;
-		ballRigidbody.angularVelocity = 0f;
+		if (pad.CurrentVelocity.y != 0.0f)
+			// Moving up keeps the pad side's direction, moving down inverts it
+			spinDirection = (pad.transform.position.x > 0.0f) == (pad.CurrentVelocity.y > 0.0f) ? 1.0f : -1.0f;
+		else
+			// Spin follows the ball's horizontal movement
+			spinDirection = ballRigidbody.linearVelocity.x > 0.0f ? -1.0f : 1.0f;
 
-		ballRigidbody.position = spawnPosition;
-
-		Physics2D.SyncTransforms();
-
-		isBallMoving = true;
-
-		circleCollider.enabled = true;
-
-		ResolveStartingOverlap();
-
-		Vector2 spawnDirection = direction.sqrMagnitude > 0.0001f ? direction.normalized : lastValidDirection;
-
-		ballRigidbody.linearVelocity = spawnDirection * Mathf.Clamp(currentSpeed, speed, maxSpeed);
-
-		ClearGhosts();
-
-		RecordTrailSample();
-
-		ApplySpawnSpin();
-
-		SFXManager.Instance.PlaySoundEffect(SFXType.BallRespawn);
-	}
-
-	public Vector2 GetSpawnPosition()
-	{
-		return spawnPosition;
+		ballRigidbody.angularVelocity = spinDirection * spinStrength;
 	}
 }
