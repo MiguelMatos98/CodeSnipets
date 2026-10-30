@@ -1,44 +1,76 @@
-﻿using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
+public enum SFXType
+{
+	BallBounce = 0,
+	Score = 1,
+	BallRespawn = 2
+}
+
+[System.Serializable]
+public class SoundEffect
+{
+	public SFXType type;
+	
+	public AudioClip clip;
+
+	[Range(0f, 1f)] public float volume = 1f;
+
+	[HideInInspector] public AudioSource source;
+}
+
 public class SFXManager : MonoBehaviour
 {
-    public enum SoundEffectLib
-    {
-        Bounce,
-        Goal,
-        Respawn
-    }
+	public static SFXManager Instance { get; private set; }
 
-    public List<SoundEffectLib> SFX_List = new List<SoundEffectLib>();
-    public List<AudioClip> AudioClip_List = new List<AudioClip>();
+	[SerializeField] private List<SoundEffect> soundEffects = new List<SoundEffect>();
 
-    public Dictionary<SoundEffectLib, AudioClip> SFX_Lib = 
-        new Dictionary<SoundEffectLib, AudioClip>();
+	private void Awake()
+	{
+		// Virify that there only exists one instance of SFXManager
+		if (Instance != null && Instance != this)
+		{
+			// In case wheter there already exists another instance of SFX manager
+			// Destroy that other instace and return here to prevent any further new initialization of this class
+			Destroy(gameObject);
 
-    public static SFXManager TheSFXManager;
+			return;
+		}
 
-    public GameObject SFXOBJ;
+		// Otherwise (If no other instance of SFX manager exists besides this one),
+		// store the only existing instance of this script in memory inside SFXManager's Instance variable (So it can be mutatable)
+		Instance = this;
 
-    void Start()
-    {
-        TheSFXManager = this;
+		// Generate an AudioSource for each sound effect on startup
+		foreach (SoundEffect sfx in soundEffects)
+		{
+			sfx.source = gameObject.AddComponent<AudioSource>();
+			sfx.source.clip = sfx.clip;
+			sfx.source.volume = sfx.volume;
+			sfx.source.playOnAwake = false;
+		}
+	}
 
-        for (int i = 0; i < SFX_List.Count; i++)
-        {
-            SFX_Lib.Add(SFX_List[i], AudioClip_List[i]);
-        }
-    }
+	public void PlaySoundEffect(SFXType soundEffectType)
+	{
+		// Cast the parameter ssound efftc type to an int
+		// (Note: Retaining your original variable here, even though the new method searches by the enum type directly!)
+		int soundEffectIndex = (int)soundEffectType;
 
-    public void PlaySFX(SoundEffectLib SFXToPlay)
-    {
-        if(SFX_Lib.ContainsKey(SFXToPlay))
-        {
-            GameObject GO = Instantiate(SFXOBJ);
-            GO.GetComponent<AudioSource>().PlayOneShot(SFX_Lib[SFXToPlay]);
-            Destroy(GO, SFX_Lib[SFXToPlay].length);
-        }
-    }
+		// Play audio source from a list of audio clips by retiving it's audio clip based on the sound effect index
+		SoundEffect sfxToPlay = soundEffects.Find(sfx => sfx.type == soundEffectType);
 
+		if (sfxToPlay != null)
+		{
+			if (sfxToPlay.source == null || sfxToPlay.clip == null)
+				return;
+
+			sfxToPlay.source.pitch = 1f;
+
+			double dspStartTime = AudioSettings.dspTime;
+
+			sfxToPlay.source.PlayScheduled(dspStartTime + 0.1);
+		}
+	}
 }
