@@ -1,0 +1,153 @@
+using System.Collections;
+using System.Collections.Generic;
+using UnityEngine;
+
+[RequireComponent(typeof(SpriteRenderer))]
+public class Trail : MonoBehaviour
+{
+	private float fadeMultiplier = 1.0f;
+
+	private const float SpacingDistance = 0.18f;
+	
+	private const float FinalTipScale = 0.25f;
+	
+	private const float Alpha = 0.35f;
+	
+	private Color originalBallColor;
+
+	private struct PositionAndRotation
+	{
+		public Vector2 position;
+		public Quaternion rotation;
+	}
+
+	private readonly List<PositionAndRotation> history = new List<PositionAndRotation>();
+	private SpriteRenderer[] ghosts;
+	private SpriteRenderer ballSprite;
+
+	public void Initialize(int ghostCount)
+	{
+		ballSprite = GetComponent<SpriteRenderer>();
+
+		originalBallColor = ballSprite.color;
+
+		ghosts = new SpriteRenderer[ghostCount];
+
+		Transform container = new GameObject("GhostTrail").transform;
+
+		container.SetParent(transform.parent);
+		
+		for (int i = 0; i < ghostCount; i++)
+		{
+			SpriteRenderer ghost = new GameObject("Ghost_" + i).AddComponent<SpriteRenderer>();
+
+			ghost.transform.SetParent(container);
+			ghost.enabled = false;
+			ghost.sprite = ballSprite.sprite;
+			ghost.sortingLayerID = ballSprite.sortingLayerID;
+			ghost.sortingOrder = ballSprite.sortingOrder - 1;
+
+			ghosts[i] = ghost;
+		}
+	}
+
+	// Records a position and a rotation only if the ball moved far enough since the last one
+	public void Record(Vector2 position)
+	{
+		if (history.Count > 0 && Vector2.Distance(position, history[0].position) < SpacingDistance)
+			return;
+
+		history.Insert(0, new PositionAndRotation { position = position, rotation = transform.rotation });
+
+		if (history.Count > ghosts.Length)
+			history.RemoveAt(history.Count - 1);
+	}
+
+	public void Refresh(float speed)
+	{
+		Color ballColor = originalBallColor;
+
+		ballColor.a *= fadeMultiplier;
+		
+		ballSprite.color = ballColor;
+
+		int fullSlots = Mathf.Clamp(Mathf.FloorToInt(speed), 0, ghosts.Length);
+
+		float fraction = speed - fullSlots;
+		
+		int visible = fraction > 0.0f ? Mathf.Min(fullSlots + 1, ghosts.Length) : fullSlots;
+
+		for (int i = 0; i < ghosts.Length; i++)
+		{
+			SpriteRenderer ghost = ghosts[i];
+
+			if (i >= visible || i >= history.Count)
+			{
+				ghost.enabled = false;
+				continue;
+			}
+
+			ghost.transform.SetPositionAndRotation(history[i].position, history[i].rotation);
+
+			float t = visible <= 1 ? 0.0f : (float)i / (visible - 1);
+			ghost.transform.localScale = transform.root.localScale * Mathf.Lerp(1.0f, FinalTipScale, t);
+
+			bool isLastVisible = i == visible - 1;
+
+			Color color = ballSprite.color;
+			color.a = Alpha * fadeMultiplier * (isLastVisible && fraction > 0.0f ? fraction : 1.0f);
+			ghost.color = color;
+
+			ghost.enabled = true;
+		}
+	}
+
+	public IEnumerator FadeOut(float duration, float speed)
+	{
+		if (duration <= 0.0f)
+		{
+			fadeMultiplier = 0.0f;
+			
+			Refresh(speed);
+
+			yield break;
+		}
+
+		float elapsed = 0.0f;
+
+		while (elapsed < duration)
+		{
+			yield return null;
+
+			elapsed += Time.deltaTime;
+			
+			fadeMultiplier = 1.0f - Mathf.Clamp01(elapsed / duration);
+
+			Refresh(speed);
+		}
+	}
+
+	public void ResetFade()
+	{
+		fadeMultiplier = 1.0f;
+
+		if (ballSprite != null)
+			ballSprite.color = originalBallColor;
+	}
+
+	public void Hide()
+	{
+		if (ghosts == null)
+			return;
+
+		foreach (SpriteRenderer ghost in ghosts)
+			ghost.enabled = false;
+	}
+
+	public void Clear()
+	{
+		history.Clear();
+
+		Hide();
+	}
+}
