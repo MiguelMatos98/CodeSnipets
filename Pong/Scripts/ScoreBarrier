@@ -1,0 +1,27 @@
+using UnityEngine;
+
+public class ScoreBarrier : MonoBehaviour
+{
+	public enum BarrierPlayerID
+	{
+		FirstPlayer,
+		SecondPlayer
+	}
+
+	[SerializeField] private BarrierPlayerID barrierPlayerID;
+	private const string BALL_TAG = "Ball";
+
+	private void OnTriggerEnter2D(Collider2D collider)
+	{
+		if (!collider.CompareTag(BALL_TAG))
+			return;
+
+		if (GameManager.Instance == null)
+			return;
+
+		if (barrierPlayerID == BarrierPlayerID.FirstPlayer)
+			GameManager.Instance.AwardPointToPlayer2();
+		else
+			GameManager.Instance.AwardPointToPlayer1();
+	}
+}
