@@ -1,0 +1,84 @@
+using TMPro;
+using UnityEngine;
+
+public enum UIState
+{
+	Menu,
+	Notification,
+	Game
+}
+
+public class UIManager : MonoBehaviour
+{
+	public static UIManager Instance { get; private set; }
+
+	[Header("Panels")]
+	[SerializeField] private GameObject menuPanel;
+	[SerializeField] private GameObject notificationPanel;
+	[SerializeField] private GameObject gamePanel;
+
+	[SerializeField] private TextMeshProUGUI notificationText;
+
+	private UIState currentUIState = UIState.Menu;
+
+	private void Awake()
+	{
+		if (Instance != null && Instance != this)
+		{
+			Destroy(gameObject);
+
+			return;
+		}
+
+		Instance = this;
+
+		// Always start on Menu.
+		SetPanelState(menu: true, notification: false, game: false);
+
+		currentUIState = UIState.Menu;
+	}
+
+	private void Start()
+	{
+		if (GameManager.Instance != null)
+			GameManager.Instance.OnGameStarted += OnGameStarted;
+	}
+
+	private void OnDestroy()
+	{
+		if (GameManager.Instance != null)
+			GameManager.Instance.OnGameStarted -= OnGameStarted;
+	}
+
+	private void OnGameStarted()
+	{
+		EnablePanel(UIState.Game);
+	}
+
+	public void EnablePanel(UIState targetUIState)
+	{
+		currentUIState = targetUIState;
+
+		SetPanelState(menu: targetUIState == UIState.Menu, notification: targetUIState == UIState.Notification, game: targetUIState == UIState.Game);
+	}
+
+	private void SetPanelState(bool menu, bool notification, bool game)
+	{
+		if (menuPanel != null)
+			menuPanel.SetActive(menu);
+
+		if (notificationPanel != null)
+			notificationPanel.SetActive(notification);
+
+		if (gamePanel != null)
+			gamePanel.SetActive(game);
+	}
+
+	public void DisplayNotification(string message)
+	{
+		if (notificationText != null)
+			notificationText.text = message;
+
+		EnablePanel(UIState.Notification);
+	}
+}
