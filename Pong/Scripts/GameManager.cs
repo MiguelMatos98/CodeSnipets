@@ -1,77 +1,192 @@
-﻿using System;
+using System;
 using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.UI;
+using TMPro;
 
 public class GameManager : MonoBehaviour
 {
+	public static GameManager Instance { get; private set; }
 
-    public static GameManager TheManager;
+	public event Action OnGameStarted;
 
-    private GameObject TheBall;
+	[Header("References")]
+	[SerializeField] private Ball ball;
+	[SerializeField] private TextMeshProUGUI player1ScoreText;
+	[SerializeField] private TextMeshProUGUI player2ScoreText;
 
-    public Text P1Text;
-    public Text P2Text;
+	[Header("Game Settings")]
+	[SerializeField] private int winningScore = 9;
+	[SerializeField] private float roundDelayTime  = 1.0f;
 
-    public int P1_Score;
-    public int P2_Score;
+	private int player1Score = 0;
+	private int player2Score = 0;
 
-    public float RespawnTimer;
+	private bool isGameOver = false;
+	private bool hasScored = true;
+	private bool hasGameStarted = false;
 
-    public float Interval;
-    private float CurInterval;
+	private Coroutine roundCoroutine;
+	private void Awake()
+	{
+		if (Instance != null && Instance != this)
+		{
+			Destroy(gameObject);
+			return;
+		}
 
-    public GameObject BallGO;
-    private bool ShouldCount = true;
+		Instance = this;
+	}
 
-    void Start()
-    {
-        TheBall = GameObject.Find("Ball");
-        TheManager = this;
-    }
+	private void Start()
+	{
+		// Prevent the ball from spawning before Play is pressed
+		if (ball != null)
+			ball.Despawn();
 
-    public void Update()
-    {
-        if (ShouldCount)
-        {
-            CurInterval += Time.deltaTime;
-            if (CurInterval > Interval)
-            {
-                CurInterval = 0;
-                Instantiate(BallGO, Vector3.zero, Quaternion.identity);
-            }
-        }
-    }
+		UpdateScoreUI();
+	}
 
-    public void Despawn(GameObject BallGO)
-    {
-        BallGO.SetActive(false);
-    }
+	private void ResetGame()
+	{
+		StopAllCoroutines();
+		roundCoroutine = null;
 
-    public IEnumerator RespawnInX(GameObject TheBallToRespawn)
-    {
-        yield return new WaitForSeconds(RespawnTimer);
-        TheBallToRespawn.SetActive(true);
-        TheBallToRespawn.GetComponent<Ball>().Respawn();
-        ShouldCount = true;
-        CurInterval = 0;
-    }
+		player1Score = 0;
+		player2Score = 0;
+		UpdateScoreUI();
 
-    internal void DespawnAll()
-    {
-        GameObject[] BallList = GameObject.FindGameObjectsWithTag("Ball");
-        for (int i = BallList.Length-1; i >= 0; i--)
-        {
-            Despawn(BallList[i]);
-        }
-        StartCoroutine(RespawnInX(BallList[0]));
-        ShouldCount = false;
-    }
+		isGameOver = false;
+		hasScored = false;
 
-    public void UpdateScores()
-    {
-        P1Text.text = P1_Score.ToString();
-        P2Text.text = P2_Score.ToString();
-    }
+		ball.Despawn();
+	}
+
+	public void StartGame()
+	{
+		if (hasGameStarted)
+			return;
+
+		if (ball == null)
+		{
+			Debug.LogError("[GameManager] Ball reference is missing!");
+			return;
+		}
+
+		ResetGame();
+		hasGameStarted = true;
+
+		StartRound(0.1f);
+		OnGameStarted?.Invoke();
+	}
+
+	public void RestartGame()
+	{
+		if (ball == null)
+			return;
+
+		ResetGame();
+		hasGameStarted = true;
+
+		StartRound(0f);
+		OnGameStarted?.Invoke();
+	}
+
+	private void StartRound(float delay)
+	{
+		if (roundCoroutine != null)
+			StopCoroutine(roundCoroutine);
+
+		roundCoroutine = StartCoroutine(RunRoundIntro(delay));
+	}
+
+	private IEnumerator RunRoundIntro(float delay)
+	{
+		hasScored = false;
+		ball.Spawn();
+
+		yield return new WaitForSeconds(delay);
+
+		ball.Launch(PickRoundDirection());
+	}
+
+	public void AwardPointToPlayer1()
+	{
+		if (hasScored || isGameOver) return;
+		hasScored = true;
+
+		player1Score++;
+		UpdateScoreUI();
+
+		BeginPointSequence();
+	}
+
+	public void AwardPointToPlayer2()
+	{
+		if (hasScored || isGameOver) return;
+		hasScored = true;
+
+		player2Score++;
+		UpdateScoreUI();
+
+		BeginPointSequence();
+	}
+
+	private void BeginPointSequence()
+	{
+		if (SFXManager.Instance != null)
+			SFXManager.Instance.PlaySoundEffect(SFXType.Score);
+
+		StartCoroutine(RunPointSequence());
+	}
+
+	private IEnumerator RunPointSequence()
+	{
+		// Allow the ghost trail to fade before despawning the ball
+		yield return ball.ExitGoalAndFadeTrail();
+
+		ball.Despawn();
+
+		if (IsGameWon())
+		{
+			EndGame();
+
+			yield break;
+		}
+
+		yield return new WaitForSeconds(roundDelayTime);
+
+		StartRound(0.0f);
+	}
+
+	private void UpdateScoreUI()
+	{
+		if (player1ScoreText != null)
+			player1ScoreText.text = player1Score.ToString();
+
+		if (player2ScoreText != null)
+			player2ScoreText.text = player2Score.ToString();
+	}
+
+	private Vector2 PickRoundDirection()
+	{
+		float x = UnityEngine.Random.value < 0.5f ? -1f : 1f;
+		float y = UnityEngine.Random.Range(-0.35f, 0.35f);
+		return new Vector2(x, y).normalized;
+	}
+
+	private bool IsGameWon()
+	{
+		return player1Score >= winningScore || player2Score >= winningScore;
+	}
+
+	private void EndGame()
+	{
+		isGameOver = true;
+		hasGameStarted = false;
+
+		int winner = player1Score >= winningScore ? 1 : 2;
+
+		if (UIManager.Instance != null)
+			UIManager.Instance.DisplayNotification($"Player {winner} Wins!");
+	}
 }
