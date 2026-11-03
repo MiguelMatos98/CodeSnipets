@@ -7,10 +7,10 @@ public class Pad : MonoBehaviour
 	private const string LeftVerticalAxis = "Vertical_1";
 	private const string RightVerticalAxis = "Vertical_2";
 
-	[SerializeField] private float speed = 10f;
-	[SerializeField] private float verticalLimit = 4.85f;
+	private float speed = 10f;
+	private float verticalLimit = 4.85f;
 
-	private float padHalfHeight;
+	private float halfHeight;
 	private float maxAllowedY;
 	private float minAllowedY;
 	private float verticalInput;
@@ -24,28 +24,24 @@ public class Pad : MonoBehaviour
 
 	private void Awake()
 	{
+	    /*
+	    Rigidbody2D has already been set in the Inspector to Dynamic, Gravity Scale to 0, Collision Detection to Continuous to 
+	    avoid tunneling through the ball, Interpolation to None because movement needs no visual smoothing, and Constraints to 
+	    freeze X position and Z rotation for moving only vertically
+		*/
+
 		padRigidbody = GetComponent<Rigidbody2D>();
 		padCollider = GetComponent<Collider2D>();
 
-		padHalfHeight = padCollider.bounds.extents.y;
+		// Storing halfheigh from pad's collider bounds to use for movement limit calculations
+		halfHeight = padCollider.bounds.extents.y;
 
 		// Adjusting the vertical movement limits to the pad's half-height to keep its edges within bounds
-		maxAllowedY = verticalLimit - padHalfHeight;
-		minAllowedY = -verticalLimit + padHalfHeight;
+		maxAllowedY = verticalLimit - halfHeight;
+		minAllowedY = -verticalLimit + halfHeight;
 
 		// Setting the left pad to use the Vertical_1 axis and the right pad to use the Vertical_2 axis
-		inputAxisName = transform.position.x < 0f ? LeftVerticalAxis : RightVerticalAxis;
-
-		// Configuring the Rigidbody2D for dynamic physics interactions, continuous collision detection and no gravity
-		padRigidbody.bodyType = RigidbodyType2D.Dynamic;
-		padRigidbody.collisionDetectionMode = CollisionDetectionMode2D.Continuous;
-		padRigidbody.gravityScale = 0f;
-
-		// Disabling interpolation and extrapolation since the Rigidbody2D's movement causes no visible jitter
-		padRigidbody.interpolation = RigidbodyInterpolation2D.None;
-
-		// Locking the X axis and rotation for vertical movement only
-		padRigidbody.constraints = RigidbodyConstraints2D.FreezePositionX | RigidbodyConstraints2D.FreezeRotation;
+		inputAxisName = transform.position.x < 0.0f ? LeftVerticalAxis : RightVerticalAxis;
 	}
 
 	private void Update()
