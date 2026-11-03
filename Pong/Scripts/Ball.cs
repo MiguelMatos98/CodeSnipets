@@ -11,7 +11,7 @@ public class Ball : MonoBehaviour
 	private int speedGainAmount;
 	
 	private float verticalLimit;
-	private float horizontalDeflectionAmount;
+	private float deflectionAmount;
 	private float spinStrength;
 	private float exitDistance;
 
@@ -34,11 +34,11 @@ public class Ball : MonoBehaviour
 		speedGainAmount = 1;
 
 		verticalLimit = 4.98f;
-		horizontalDeflectionAmount = 0.15f;
+		deflectionAmount = 0.15f;
 		spinStrength = 720.0f;
 		exitDistance = 3.5f;
 
-		// Using the ball's starting scene position as its spawn point
+		// Storing the ball's starting scene position as its spawn point
 		spawnPosition = transform.position;
 
 		incomingVelocity = Vector2.zero;
@@ -53,22 +53,24 @@ public class Ball : MonoBehaviour
 
 	private void FixedUpdate()
 	{
-		if (ballRigidbody.bodyType != RigidbodyType2D.Dynamic)
+		// Ignoring ball movement when its rigibody is kinematic
+		if (ballRigidbody.bodyType == RigidbodyType2D.Kinematic)
 			return;
 
-		ClampSpeed();
-
+		// Correcting the ball's movement when it's within limits
 		if (circleCollider.enabled)
-			CorrectMovementAtWalls();
+		{
+			KeepWithinLimits();
 
-		// Storing the velocity before the next collision changes it
+			Vector2 deflectedVelocity = EnsureMinimumDeflection(ballRigidbody.linearVelocity);
+
+			ballRigidbody.linearVelocity = deflectedVelocity;
+		}
+
+		// Storing the incoming velocity for future bounces calculations
 		incomingVelocity = ballRigidbody.linearVelocity;
 
 		trail.Record(ballRigidbody.position);
-
-		// Keeping the spin constant against damping and friction
-		ballRigidbody.angularVelocity = Mathf.Sign(ballRigidbody.angularVelocity) * spinStrength;
-
 		trail.Refresh(ballRigidbody.linearVelocity.magnitude);
 	}
 
@@ -83,7 +85,7 @@ public class Ball : MonoBehaviour
 		if (Vector2.Dot(incomingVelocity, contact.normal) >= 0.0f)
 			return;
 
-		ResolveBounce(contact.point, contact.normal, collision.collider);
+		ApplyBounce(contact.point, contact.normal, collision.collider);
 	}
 
 	public void Spawn()
@@ -138,77 +140,94 @@ public class Ball : MonoBehaviour
 		trail.Hide();
 	}
 
-	private void ReflectOffWall(Vector2 normal)
+	private void KeepWithinLimits()
+	{
+		// Scaling the collider's radius from local-space to world-space units
+		float worldRadius = circleCollider.radius * transform.lossyScale.x;
+
+		Vector2 correctedPosition = ballRigidbody.position;
+		Vector2 correctedVelocity = ballRigidbody.linearVelocity;
+
+		// Correcting the ball's position when exceeds the upper wall 
+		if (correctedPosition.y + worldRadius > verticalLimit)
+		{
+			correctedPosition.y = verticalLimit - worldRadius;
+
+			// Flipping the ball's direction away from the upper wall (up to down)
+			if (correctedVelocity.y > 0.0f)
+				correctedVelocity.y = -correctedVelocity.y;
+		}
+		// Correcting the ball's position when exceeds the lower wall
+		else if (correctedPosition.y - worldRadius < -verticalLimit)
+		{
+			correctedPosition.y = -verticalLimit + worldRadius;
+
+			// Flipping the ball's direction away from the lower wall (down to up)
+			if (correctedVelocity.y < 0.0f)
+				correctedVelocity.y = -correctedVelocity.y;
+		}
+		// Returning when neither walls have been crossed
+		else
+			return;
+
+		// Applying the newly corrected position and velocity to the Rigidbody
+		ballRigidbody.position = correctedPosition;
+		ballRigidbody.linearVelocity = correctedVelocity;
+	}
+
+	private Vector2 EnsureMinimumDeflection(Vector2 currentVelocity)
+	{
+		float currentSpeed = currentVelocity.magnitude;
+		Vector2 direction = currentVelocity.normalized;
+
+		// Preventing near-vertical trajectories by enforcing a minimum horizontal direction
+		if (Mathf.Abs(direction.x) < deflectionAmount)
+		{
+			float sign = direction.x != 0.0f ? Mathf.Sign(direction.x) : (Random.value < 0.5f ? -1.0f : 1.0f);
+
+			direction.x = sign * deflectionAmount;
+
+			direction.y = Mathf.Sign(direction.y) * Mathf.Sqrt(1.0f - deflectionAmount * deflectionAmount);
+		}
+		// Preventing near-horizontal trajectories by enforcing a minimum vertical direction
+		else if (Mathf.Abs(direction.y) < deflectionAmount)
+		{
+			float sign = direction.y != 0.0f ? Mathf.Sign(direction.y) : (Random.value < 0.5f ? -1.0f : 1.0f);
+
+			direction.y = sign * deflectionAmount;
+
+			direction.x = Mathf.Sign(direction.x) * Mathf.Sqrt(1.0f - deflectionAmount * deflectionAmount);
+		}
+
+		return direction * currentSpeed;
+	}
+
+	private void BounceOffWall(Vector2 normal)
 	{
 		Vector2 incomingDirection = incomingVelocity.normalized;
 
 		Vector2 reflectedDirection = Vector2.Reflect(incomingDirection, normal).normalized;
-
-		// Preventing near vertical reflections off the top and bottom walls by enforcing a minimum horizontal direction
-		if (Mathf.Abs(normal.y) > 0.99f && Mathf.Abs(reflectedDirection.x) < horizontalDeflectionAmount)
-		{
-			float sign = reflectedDirection.x != 0.0f ? Mathf.Sign(reflectedDirection.x) : (Random.value < 0.5f ? -1.0f : 1.0f);
-
-			reflectedDirection.x += sign * horizontalDeflectionAmount;
-
-			reflectedDirection.Normalize();
-		}
 
 		float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude, minSpeed, maxSpeed);
 
 		ballRigidbody.linearVelocity = reflectedDirection * reflectedSpeed;
 	}
 	
-	private void CorrectMovementAtWalls()
-	{
-		// Converting the collider's radius from local-space to world-space units
-		float worldRadius = circleCollider.radius * transform.lossyScale.x;
-
-		Vector2 correctedPosition = ballRigidbody.position;
-		Vector2 correctedVelocity = ballRigidbody.linearVelocity;
-
-		// Correcting the ball's position if it exceeds the upper wall 
-		if (correctedPosition.y + worldRadius > verticalLimit)
-		{
-			correctedPosition.y = verticalLimit - worldRadius;
-
-			// Flipping the ball's direction from up to down
-			if (correctedVelocity.y > 0.0f)
-				correctedVelocity.y = -correctedVelocity.y;
-		}
-		// Correcting the ball's position if it exceeds the lower wall
-		else if (correctedPosition.y - worldRadius < -verticalLimit)
-		{
-			correctedPosition.y = -verticalLimit + worldRadius;
-
-			// Flipping the ball's direction from down to up
-			if (correctedVelocity.y < 0.0f)
-				correctedVelocity.y = -correctedVelocity.y;
-		}
-		// Returning if neither walls have been crossed
-		else
-			return;
-
-		// Applying the corrected position and velocity to the Rigidbody
-		ballRigidbody.position = correctedPosition;
-		ballRigidbody.linearVelocity = correctedVelocity;
-	}
-
-	private Vector2 ReflectOffPad(Vector2 contactPoint, Collider2D padCollider)
+	private Vector2 BounceOffPad(Vector2 contactPoint, Collider2D padCollider)
 	{
 		Vector2 padCenter = padCollider.bounds.center;
 
 		return (contactPoint - padCenter).normalized;
 	}
 
-	private void ResolveBounce(Vector2 point, Vector2 normal, Collider2D collider)
+	private void ApplyBounce(Vector2 point, Vector2 normal, Collider2D collider)
 	{
 		if (collider.CompareTag("Pad"))
 		{
 			if (!collider.TryGetComponent(out Pad pad))
 				return;
 
-			Vector2 reflectedDirection = ReflectOffPad(point, collider);
+			Vector2 reflectedDirection = BounceOffPad(point, collider);
 
 			float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude + speedGainAmount, minSpeed, maxSpeed);
 
@@ -217,7 +236,7 @@ public class Ball : MonoBehaviour
 			ApplySpin(pad);
 		}
 		else
-			ReflectOffWall(normal);
+			BounceOffWall(normal);
 
 		// Store the outgoing velocity for subsequent collision handling
 		incomingVelocity = ballRigidbody.linearVelocity;
@@ -225,35 +244,27 @@ public class Ball : MonoBehaviour
 		SFXManager.Instance.PlaySoundEffect(SFXType.BallBounce);
 	}
 
-	private void ClampSpeed()
+	private Vector2 GetClampedVelocity(Vector2 currentVelocity)
 	{
-		Vector2 currentVelocity = ballRigidbody.linearVelocity;
-
+		// Retriving the ball's speed from linear velocty's magnitude
 		float currentSpeed = currentVelocity.magnitude;
 
-		// Using the stored velocity if the current velocity is nearly zero
-		if (currentSpeed <= 0.01f)
-		{
-			currentVelocity = incomingVelocity;
-			currentSpeed = currentVelocity.magnitude;
-
-			// Returning if the stored velocity is effectively zero
-			if (currentSpeed <= 0.0001f)
-				return;
-		}
-
+		// Clamping the current speed so it remains within the minimum and maximum speed values
 		float clampedSpeed = Mathf.Clamp(currentSpeed, minSpeed, maxSpeed);
 
-		ballRigidbody.linearVelocity = currentVelocity.normalized * clampedSpeed;
+		// Returning a new velocity by multiplying its normalised direction by the clamped speed
+		return currentVelocity.normalized * clampedSpeed;
 	}
 
-	public IEnumerator ExitGoalAndFadeTrail()
+	public IEnumerator ExitGoal()
 	{
-		ClampSpeed();
+		Vector2 clampedVelocity = GetClampedVelocity(ballRigidbody.linearVelocity);
+
+		ballRigidbody.linearVelocity = clampedVelocity;
 
 		circleCollider.enabled = false;
 
-		float exitSpeed = ballRigidbody.linearVelocity.magnitude;
+		float exitSpeed = clampedVelocity.magnitude;
 
 		if (exitSpeed <= 0.0001f)
 			yield break;
