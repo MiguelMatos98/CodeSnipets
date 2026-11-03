@@ -34,7 +34,7 @@ public class Ball : MonoBehaviour
 		speedGainAmount = 1;
 
 		verticalLimit = 4.98f;
-		deflectionAmount = 0.15f;
+		deflectionAmount = 0.2f;
 		spinStrength = 720.0f;
 		exitDistance = 3.5f;
 
@@ -59,17 +59,13 @@ public class Ball : MonoBehaviour
 
 		// Correcting the ball's movement when it's within limits
 		if (circleCollider.enabled)
-		{
 			KeepWithinLimits();
-
-			Vector2 deflectedVelocity = EnsureMinimumDeflection(ballRigidbody.linearVelocity);
-
-			ballRigidbody.linearVelocity = deflectedVelocity;
-		}
 
 		// Storing the incoming velocity for future bounces calculations
 		incomingVelocity = ballRigidbody.linearVelocity;
 
+		//      DON'T COMMENT YET, ADDRESS SCRIPT FIRST 
+		// ---------------------------------------------------
 		trail.Record(ballRigidbody.position);
 		trail.Refresh(ballRigidbody.linearVelocity.magnitude);
 	}
@@ -85,7 +81,7 @@ public class Ball : MonoBehaviour
 		if (Vector2.Dot(incomingVelocity, contact.normal) >= 0.0f)
 			return;
 
-		ApplyBounce(contact.point, contact.normal, collision.collider);
+		ApplyBounce(contact, collision.collider);
 	}
 
 	public void Spawn()
@@ -175,18 +171,14 @@ public class Ball : MonoBehaviour
 		ballRigidbody.linearVelocity = correctedVelocity;
 	}
 
-	private Vector2 EnsureMinimumDeflection(Vector2 currentVelocity)
+	private Vector2 EnsureMinimumDeflection(Vector2 direction)
 	{
-		float currentSpeed = currentVelocity.magnitude;
-		Vector2 direction = currentVelocity.normalized;
-
 		// Preventing near-vertical trajectories by enforcing a minimum horizontal direction
 		if (Mathf.Abs(direction.x) < deflectionAmount)
 		{
 			float sign = direction.x != 0.0f ? Mathf.Sign(direction.x) : (Random.value < 0.5f ? -1.0f : 1.0f);
 
 			direction.x = sign * deflectionAmount;
-
 			direction.y = Mathf.Sign(direction.y) * Mathf.Sqrt(1.0f - deflectionAmount * deflectionAmount);
 		}
 		// Preventing near-horizontal trajectories by enforcing a minimum vertical direction
@@ -195,52 +187,102 @@ public class Ball : MonoBehaviour
 			float sign = direction.y != 0.0f ? Mathf.Sign(direction.y) : (Random.value < 0.5f ? -1.0f : 1.0f);
 
 			direction.y = sign * deflectionAmount;
-
 			direction.x = Mathf.Sign(direction.x) * Mathf.Sqrt(1.0f - deflectionAmount * deflectionAmount);
 		}
 
-		return direction * currentSpeed;
+		return direction;
 	}
 
-	private void BounceOffWall(Vector2 normal)
+	private Vector2 BounceOffWall(ContactPoint2D contact)
 	{
 		Vector2 incomingDirection = incomingVelocity.normalized;
 
-		Vector2 reflectedDirection = Vector2.Reflect(incomingDirection, normal).normalized;
-
-		float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude, minSpeed, maxSpeed);
-
-		ballRigidbody.linearVelocity = reflectedDirection * reflectedSpeed;
+		return Vector2.Reflect(incomingDirection, contact.normal).normalized;
 	}
-	
-	private Vector2 BounceOffPad(Vector2 contactPoint, Collider2D padCollider)
+
+	private Vector2 BounceOffPad(ContactPoint2D contact, Collider2D padCollider)
 	{
 		Vector2 padCenter = padCollider.bounds.center;
 
-		return (contactPoint - padCenter).normalized;
+		Vector2 hitOffset = contact.point - padCenter;
+
+		Vector2 padExtents = padCollider.bounds.extents;
+
+		// Front and back faces steer vertically by hit height.
+		if (Mathf.Abs(contact.normal.x) > Mathf.Abs(contact.normal.y))
+		{
+			float verticalSteer = Mathf.Clamp(hitOffset.y / padExtents.y, -1.0f, 1.0f);
+
+			return new Vector2(Mathf.Sign(contact.normal.x), verticalSteer).normalized;
+		}
+
+		// Upper and lower faces steer horizontally by hit position.
+		float horizontalSteer = Mathf.Clamp(hitOffset.x / padExtents.x, -1.0f, 1.0f);
+
+		return new Vector2(horizontalSteer, Mathf.Sign(contact.normal.y)).normalized;
 	}
 
-	private void ApplyBounce(Vector2 point, Vector2 normal, Collider2D collider)
+	private void ApplyBounce(ContactPoint2D contact, Collider2D collider)
 	{
+		Vector2 incomingDirection = incomingVelocity.normalized;
+
+		Pad pad = null;
+
+		Vector2 reflectedDirection;
+
+		float reflectedSpeed;
+
 		if (collider.CompareTag("Pad"))
 		{
-			if (!collider.TryGetComponent(out Pad pad))
+			if (!collider.TryGetComponent(out pad))
 				return;
 
-			Vector2 reflectedDirection = BounceOffPad(point, collider);
+			reflectedDirection = BounceOffPad(contact, collider);
 
-			float reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude + speedGainAmount, minSpeed, maxSpeed);
-
-			ballRigidbody.linearVelocity = reflectedDirection * reflectedSpeed;
-
-			ApplySpin(pad);
+			reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude + speedGainAmount, minSpeed, maxSpeed);
 		}
 		else
-			BounceOffWall(normal);
+		{
+			reflectedDirection = BounceOffWall(contact);
 
-		// Store the outgoing velocity for subsequent collision handling
-		incomingVelocity = ballRigidbody.linearVelocity;
+			reflectedSpeed = Mathf.Clamp(incomingVelocity.magnitude, minSpeed, maxSpeed);
+		}
 
+		Vector2 correctedDirection = EnsureMinimumDeflection(reflectedDirection);
+
+		Vector2 uncorrectedVelocity = reflectedDirection * reflectedSpeed;
+		Vector2 correctedVelocity = correctedDirection * reflectedSpeed;
+
+		float directionChange = Vector2.Angle(reflectedDirection, correctedDirection);
+
+		// Debugging trajectory corrections
+		if (directionChange > 0.001f)
+		{
+			Debug.Log($"Trajectory corrected | Before: ({uncorrectedVelocity.x:F4}, {uncorrectedVelocity.y:F4}) | " + $"After: ({correctedVelocity.x:F4}, {correctedVelocity.y:F4}) | " + $"Direction change: {directionChange:F4} degrees | " + $"Speed: {correctedVelocity.magnitude:F2}", this);
+
+			Debug.DrawRay(contact.point, reflectedDirection * 2.0f, Color.cyan, 2.0f);
+			Debug.DrawRay(contact.point, correctedDirection * 2.0f, Color.magenta, 2.0f);
+		}
+
+		ballRigidbody.linearVelocity = correctedVelocity;
+
+		if (pad != null)
+			ApplySpin(pad);
+
+		Vector2 outgoingVelocity = ballRigidbody.linearVelocity;
+
+		// Debugging incoming and outgoing bounce directions
+		string bounceType = collider.CompareTag("Pad") ? "Pad" : "Wall";
+
+		Debug.Log($"{bounceType} bounce | Incoming: ({incomingVelocity.x:F4}, {incomingVelocity.y:F4}) | " + $"Outgoing: ({outgoingVelocity.x:F4}, {outgoingVelocity.y:F4}) | " + $"Speed: {outgoingVelocity.magnitude:F2}", this);
+
+		Debug.DrawRay(contact.point, incomingDirection * 2.0f, Color.yellow, 2.0f);
+		Debug.DrawRay(contact.point, outgoingVelocity.normalized * 2.0f, Color.green, 2.0f);
+
+		// Storing the outgoing velocity for subsequent collision handling
+		incomingVelocity = outgoingVelocity;
+
+		SFXManager.Instance.PlaySoundEffect(SFXType.BallBounce);
 		SFXManager.Instance.PlaySoundEffect(SFXType.BallBounce);
 	}
 
